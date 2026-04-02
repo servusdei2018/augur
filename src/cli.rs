@@ -139,6 +139,12 @@ pub enum ReviewTarget {
         /// Local clone of the repository (enables read_file_at_ref and grep tools for the agent).
         #[arg(long)]
         repo_path: Option<PathBuf>,
+
+        /// Override the review action posted to GitHub.
+        /// Accepted values: `approve`, `request-changes`, `comment` (case-insensitive).
+        /// When omitted the agent's recommendation is used; falls back to `comment`.
+        #[arg(long, value_name = "ACTION")]
+        review_action: Option<String>,
     },
 }
 
@@ -198,6 +204,7 @@ mod tests {
                     number,
                     dry_run,
                     repo_path,
+                    review_action: _,
                 } => {
                     assert_eq!(owner, "octo-org");
                     assert_eq!(repo, "hello-world");

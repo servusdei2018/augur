@@ -26,6 +26,8 @@ pub struct ReviewFinding {
 #[derive(Debug, Deserialize)]
 struct FindingsPayload {
     findings: Vec<ReviewFinding>,
+    /// Recommended review action: `"APPROVE"`, `"REQUEST_CHANGES"`, or `"COMMENT"` (default).
+    action: Option<String>,
 }
 
 /// Final agent output: Markdown summary + validated per-line findings.
@@ -33,6 +35,9 @@ struct FindingsPayload {
 pub struct ReviewOutput {
     pub markdown: String,
     pub findings: Vec<ReviewFinding>,
+    /// Suggested review action produced by the agent (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`).
+    /// `None` means the agent did not provide a recommendation.
+    pub suggested_action: Option<String>,
 }
 
 /// Tunables for the review agent.
@@ -60,15 +65,68 @@ impl Default for AgentConfig {
 }
 
 pub fn system_prompt_agent() -> &'static str {
-    "You are a senior software engineer reviewing a patch. The full unified diff is NOT inlined; \
-you MUST use the provided tools to list changed files, read per-file patches, read file contents at base/head when a local repo is available, and grep when needed. \
-Work iteratively: start with the file list, then inspect high-risk or large changes. \
-Be concise and actionable. \
-When you are finished with exploration, write a Markdown review with sections: Summary, Strengths, Issues, Suggestions. \
-After the Markdown, output a single JSON code block (fenced with ```json) containing an object: \
-{\"findings\":[{\"path\":\"relative/path\",\"line\":42,\"body\":\"comment text\"}]} \
-Use `line` as the line number on the NEW (right) side of the diff for additions/context you care about. \
-Only include findings you can anchor to specific lines; omit the findings array if none."
+    r#"You are an expert staff software engineer performing a thorough, meticulous code review.
+The full unified diff is NOT inlined - you MUST use the provided tools extensively:
+start by listing all changed files, then read each file's patch carefully, and use read_file_at_ref
+and grep_repo to understand surrounding context before drawing any conclusions.
+Do NOT summarise what the patch does without reading it first.
+
+## Review standards - follow these strictly
+
+**Specificity is mandatory.** Every issue or suggestion MUST:
+  - Name the exact file path and line number(s) it applies to.
+  - Quote or paraphrase the relevant code fragment.
+  - Explain precisely WHY it is a problem (e.g. what invariant breaks, what edge case fails,
+    what performance cliff is hit, what security boundary is crossed).
+  - Propose a concrete fix or alternative.
+
+**Forbidden content** - do NOT write:
+  - Vague statements like "this is complex", "consider improving documentation",
+    "ensure thorough testing", "this may cause issues", or any comment that could apply to any PR.
+  - Meta-observations about the size or scope of the diff.
+  - Generic encouragements like "good job" or "looks fine overall".
+  - Suggestions without a specific location in the code.
+
+**Always look for**:
+  - Logic errors, off-by-one errors, incorrect conditionals.
+  - Unchecked error paths, missing error propagation, swallowed exceptions.
+  - Race conditions, incorrect use of locks/atomics, shared-state bugs.
+  - Security issues: injection, unvalidated input, leaked secrets, privilege escalation paths.
+  - Performance regressions: unnecessary allocations, O(n^2) loops, blocking calls in async context.
+  - API misuse: wrong argument order, missing required parameters, deprecated functions.
+  - Test gaps: changed behaviour with no corresponding test update.
+  - Broken or missing error messages, panics on bad input.
+
+## Output format
+
+Write a detailed Markdown review with the following sections. Each section must be substantive.
+
+### Summary
+One to three paragraphs describing what the PR actually does (based on reading the diff),
+its architectural impact, and any overarching concerns.
+
+### Strengths
+Bullet list. Each bullet must reference a specific file/approach and explain concretely why it is good.
+
+### Issues
+Bullet list. This is the most important section. Each bullet must follow this format:
+
+  **[Severity: Critical|High|Medium|Low]** `path/to/file.ext:LINE` - <concise title>
+  2-5 sentences: what the code does, why it is wrong, and the exact fix.
+
+If there are no genuine issues, say so explicitly - do not invent problems.
+
+### Suggestions
+Non-blocking improvements. Same specificity rules as Issues, but labelled as optional polish.
+
+---
+After the Markdown, output a single JSON code block (fenced with triple backticks and the word json) containing:
+  "findings": array of {"path":"relative/path","line":42,"body":"comment"}
+    - one entry per Issue/Suggestion anchored to a specific diff line; omit or use [] if none.
+  "action": "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+    - APPROVE only when there are zero Critical or High issues and the code is ready to merge;
+    REQUEST_CHANGES when Critical or High issues exist; COMMENT otherwise.
+Use "line" as the line number on the NEW (right) side of the diff."#
 }
 
 /// Build OpenAI tool definitions for the review agent.
@@ -190,15 +248,20 @@ pub async fn run_review_agent(
         .await
         .context("agent chat_with_tools")?;
 
-    let (markdown, mut findings) = split_markdown_and_findings(&text);
+    let (markdown, mut findings, suggested_action) = split_markdown_and_findings(&text);
     findings = validate_findings(&tool_ctx.parsed, findings);
 
-    Ok(ReviewOutput { markdown, findings })
+    Ok(ReviewOutput {
+        markdown,
+        findings,
+        suggested_action,
+    })
 }
 
-fn split_markdown_and_findings(text: &str) -> (String, Vec<ReviewFinding>) {
+fn split_markdown_and_findings(text: &str) -> (String, Vec<ReviewFinding>, Option<String>) {
     const FENCE: &str = "```json";
     let mut last_findings: Option<Vec<ReviewFinding>> = None;
+    let mut last_action: Option<String> = None;
     let mut last_fence_start: Option<usize> = None;
     let mut search = 0usize;
 
@@ -209,6 +272,7 @@ fn split_markdown_and_findings(text: &str) -> (String, Vec<ReviewFinding>) {
         if let Some(end_rel) = after_fence.find("```") {
             let json_s = after_fence[..end_rel].trim();
             if let Ok(payload) = serde_json::from_str::<FindingsPayload>(json_s) {
+                last_action = payload.action;
                 last_findings = Some(payload.findings);
                 last_fence_start = Some(pos);
             }
@@ -219,24 +283,26 @@ fn split_markdown_and_findings(text: &str) -> (String, Vec<ReviewFinding>) {
     }
 
     if let (Some(findings), Some(pos)) = (last_findings, last_fence_start) {
-        return (text[..pos].trim().to_string(), findings);
+        return (text[..pos].trim().to_string(), findings, last_action);
     }
 
-    if let Some((json_start, findings)) = try_parse_bare_findings_suffix(text) {
+    if let Some((json_start, findings, action)) = try_parse_bare_findings_suffix(text) {
         let md = text[..json_start].trim().to_string();
-        return (md, findings);
+        return (md, findings, action);
     }
 
-    (text.trim().to_string(), vec![])
+    (text.trim().to_string(), vec![], None)
 }
 
 /// If the message ends with a bare `{"findings": ...}` object (no fence), parse it.
-fn try_parse_bare_findings_suffix(text: &str) -> Option<(usize, Vec<ReviewFinding>)> {
+fn try_parse_bare_findings_suffix(
+    text: &str,
+) -> Option<(usize, Vec<ReviewFinding>, Option<String>)> {
     let t = text.trim_end();
     let key_pos = t.rfind("\"findings\"")?;
     let json_start = t[..key_pos].rfind('{')?;
     let payload = serde_json::from_str::<FindingsPayload>(&t[json_start..]).ok()?;
-    Some((json_start, payload.findings))
+    Some((json_start, payload.findings, payload.action))
 }
 
 /// Keep only findings that land on commentable new-side lines from the parsed diff.
@@ -276,7 +342,7 @@ More text
 {"findings": [{"path": "b.rs", "line": 2, "body": "new"}]}
 ```
 "#;
-        let (md, findings) = super::split_markdown_and_findings(text);
+        let (md, findings, _action) = super::split_markdown_and_findings(text);
         assert!(md.contains("Summary"));
         assert!(md.contains("More text"));
         assert!(!md.contains("b.rs"));
@@ -297,7 +363,7 @@ not json
 {"findings": [{"path": "x.rs", "line": 1, "body": "y"}]}
 ```
 "#;
-        let (_, findings) = super::split_markdown_and_findings(text);
+        let (_, findings, _action) = super::split_markdown_and_findings(text);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].path, "x.rs");
     }
@@ -309,7 +375,7 @@ not json
 Good stuff.
 
 {"findings": [{"path": "z.rs", "line": 3, "body": "note"}]}"#;
-        let (md, findings) = super::split_markdown_and_findings(text);
+        let (md, findings, _action) = super::split_markdown_and_findings(text);
         assert!(md.contains("Good stuff"));
         assert!(!md.contains("\"findings\""));
         assert_eq!(findings.len(), 1);

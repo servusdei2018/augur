@@ -4,7 +4,7 @@ use augur::cli::{Augur, Commands, ReviewArgs, ReviewRunOpts, ReviewTarget};
 use augur::diff::parse_unified_diff;
 use augur::git;
 use augur::git::repo::resolve_to_commit;
-use augur::github;
+use augur::github::{self, PrReviewRequest, ReviewAction};
 use augur::llm::LlmConfig;
 use augur::review::{
     changed_files_summary, maybe_truncate_diff, system_prompt, user_prompt_local,
@@ -12,6 +12,15 @@ use augur::review::{
 };
 use augur::tools::ToolContext;
 use clap::Parser;
+
+struct ReviewPrArgs {
+    owner: String,
+    repo_name: String,
+    number: u64,
+    dry_run: bool,
+    repo_path: Option<std::path::PathBuf>,
+    cli_action: Option<String>,
+}
 
 fn build_agent_config(run: &ReviewRunOpts) -> AgentConfig {
     AgentConfig {
@@ -98,15 +107,15 @@ async fn review_local(
     print_review_output(&out, run.json)
 }
 
-async fn review_pr(
-    cfg: &LlmConfig,
-    args: &ReviewArgs,
-    owner: String,
-    repo_name: String,
-    number: u64,
-    dry_run: bool,
-    repo_path: Option<std::path::PathBuf>,
-) -> Result<()> {
+async fn review_pr(cfg: &LlmConfig, args: &ReviewArgs, pr: ReviewPrArgs) -> Result<()> {
+    let ReviewPrArgs {
+        owner,
+        repo_name,
+        number,
+        dry_run,
+        repo_path,
+        cli_action,
+    } = pr;
     let run = &args.run;
     let octo = github::octocrab_from_env()?;
     let info = github::fetch_pr_info(&octo, &owner, &repo_name, number).await?;
@@ -132,14 +141,22 @@ async fn review_pr(
         if dry_run {
             tracing::info!("dry-run: not posting review to GitHub");
         } else {
+            // For single-shot mode, no agent action is available; honour the CLI flag or default.
+            let action = cli_action
+                .as_deref()
+                .and_then(ReviewAction::from_str_loose)
+                .unwrap_or_default();
             github::post_pr_review(
                 &octo,
                 &owner,
                 &repo_name,
                 number,
-                &text,
-                &info.head_sha,
-                &[],
+                PrReviewRequest {
+                    body: &text,
+                    head_sha: &info.head_sha,
+                    inline_comments: &[],
+                    action,
+                },
             )
             .await?;
             eprintln!("Posted pull request review to {owner}/{repo_name}#{number}.");
@@ -201,14 +218,30 @@ async fn review_pr(
         .map(|f| (f.path.clone(), f.line, f.body.clone()))
         .collect();
 
+    // Action resolution: CLI flag → agent suggestion → default (Comment).
+    let action = cli_action
+        .as_deref()
+        .and_then(ReviewAction::from_str_loose)
+        .or_else(|| {
+            out.suggested_action
+                .as_deref()
+                .and_then(ReviewAction::from_str_loose)
+        })
+        .unwrap_or_default();
+
+    tracing::info!("Posting review with action: {}", action.as_api_str());
+
     github::post_pr_review(
         &octo,
         &owner,
         &repo_name,
         number,
-        &out.markdown,
-        &info.head_sha,
-        &inline,
+        PrReviewRequest {
+            body: &out.markdown,
+            head_sha: &info.head_sha,
+            inline_comments: &inline,
+            action,
+        },
     )
     .await?;
     eprintln!("Posted pull request review to {owner}/{repo_name}#{number}.");
@@ -257,15 +290,19 @@ async fn main() -> Result<()> {
                     number,
                     dry_run,
                     ref repo_path,
+                    ref review_action,
                 } => {
                     review_pr(
                         &cfg,
                         &args,
-                        owner.clone(),
-                        repo.clone(),
-                        number,
-                        dry_run,
-                        repo_path.clone(),
+                        ReviewPrArgs {
+                            owner: owner.clone(),
+                            repo_name: repo.clone(),
+                            number,
+                            dry_run,
+                            repo_path: repo_path.clone(),
+                            cli_action: review_action.clone(),
+                        },
                     )
                     .await?;
                 }

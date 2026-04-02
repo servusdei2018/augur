@@ -4,6 +4,39 @@ use anyhow::{Context, Result};
 use octocrab::Octocrab;
 use serde::Serialize;
 
+/// The type of formal review to post to GitHub.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ReviewAction {
+    /// Leave only a comment; does not change the PR status.
+    #[default]
+    Comment,
+    /// Formally approve the PR.
+    Approve,
+    /// Request changes; blocks merging (for repos that enforce reviews).
+    RequestChanges,
+}
+
+impl ReviewAction {
+    /// GitHub API string for the `event` field.
+    pub fn as_api_str(&self) -> &'static str {
+        match self {
+            ReviewAction::Comment => "COMMENT",
+            ReviewAction::Approve => "APPROVE",
+            ReviewAction::RequestChanges => "REQUEST_CHANGES",
+        }
+    }
+
+    /// Parse from a case-insensitive string (CLI / agent output).
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_ascii_uppercase().replace('-', "_").as_str() {
+            "COMMENT" => Some(ReviewAction::Comment),
+            "APPROVE" => Some(ReviewAction::Approve),
+            "REQUEST_CHANGES" => Some(ReviewAction::RequestChanges),
+            _ => None,
+        }
+    }
+}
+
 const DIFF_ACCEPT: &str = "application/vnd.github.diff";
 
 /// GitHub REST API base URL for HTTP requests and `octocrab`.
@@ -145,19 +178,35 @@ struct ReviewCommentPayload {
     side: String,
 }
 
+/// Parameters for [`post_pr_review`].
+pub struct PrReviewRequest<'a> {
+    /// Markdown body for the top-level review comment.
+    pub body: &'a str,
+    /// The commit SHA at the PR head (required by the GitHub API).
+    pub head_sha: &'a str,
+    /// Per-line inline comments: `(file path, new-side line number, comment body)`.
+    pub inline_comments: &'a [(String, u32, String)],
+    /// The type of review to submit.
+    pub action: ReviewAction,
+}
+
 /// Post a pull request review with Markdown body and optional per-line comments (`RIGHT` side).
+///
+/// `req.action` controls the review type posted to GitHub:
+/// - [`ReviewAction::Comment`] — a plain review comment (no approval / block)
+/// - [`ReviewAction::Approve`] — formally approves the PR
+/// - [`ReviewAction::RequestChanges`] — requests changes (blocks merging where enforced)
 pub async fn post_pr_review(
     octo: &Octocrab,
     owner: &str,
     repo: &str,
     number: u64,
-    body: &str,
-    head_sha: &str,
-    inline_comments: &[(String, u32, String)],
+    req: PrReviewRequest<'_>,
 ) -> Result<()> {
     let route = format!("/repos/{}/{}/pulls/{}/reviews", owner, repo, number);
 
-    let comments: Vec<ReviewCommentPayload> = inline_comments
+    let comments: Vec<ReviewCommentPayload> = req
+        .inline_comments
         .iter()
         .map(|(path, line, text)| ReviewCommentPayload {
             path: path.clone(),
@@ -168,9 +217,9 @@ pub async fn post_pr_review(
         .collect();
 
     let payload = CreateReviewBody {
-        body: body.to_string(),
-        event: "COMMENT".to_string(),
-        commit_id: head_sha.to_string(),
+        body: req.body.to_string(),
+        event: req.action.as_api_str().to_string(),
+        commit_id: req.head_sha.to_string(),
         comments,
     };
 
@@ -264,11 +313,42 @@ mod tests {
             "acme",
             "demo",
             7,
-            "## LGTM",
-            "abc123",
-            &[("src/lib.rs".to_string(), 10, "nit".to_string())],
+            PrReviewRequest {
+                body: "## LGTM",
+                head_sha: "abc123",
+                inline_comments: &[("src/lib.rs".to_string(), 10, "nit".to_string())],
+                action: ReviewAction::Comment,
+            },
         )
         .await
         .expect("post review");
+    }
+
+    #[test]
+    fn review_action_api_strings() {
+        assert_eq!(ReviewAction::Comment.as_api_str(), "COMMENT");
+        assert_eq!(ReviewAction::Approve.as_api_str(), "APPROVE");
+        assert_eq!(ReviewAction::RequestChanges.as_api_str(), "REQUEST_CHANGES");
+    }
+
+    #[test]
+    fn review_action_from_str_loose() {
+        assert_eq!(
+            ReviewAction::from_str_loose("approve"),
+            Some(ReviewAction::Approve)
+        );
+        assert_eq!(
+            ReviewAction::from_str_loose("REQUEST_CHANGES"),
+            Some(ReviewAction::RequestChanges)
+        );
+        assert_eq!(
+            ReviewAction::from_str_loose("request-changes"),
+            Some(ReviewAction::RequestChanges)
+        );
+        assert_eq!(
+            ReviewAction::from_str_loose("comment"),
+            Some(ReviewAction::Comment)
+        );
+        assert_eq!(ReviewAction::from_str_loose("bogus"), None);
     }
 }
