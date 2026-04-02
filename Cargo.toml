@@ -1,0 +1,25 @@
+[package]
+name = "augur"
+version = "0.1.0"
+edition = "2021"
+description = "CLI code review for local git branches and GitHub pull requests via OpenAI-compatible APIs"
+
+[dependencies]
+anyhow = "1"
+async-openai = "0.27"
+clap = { version = "4", features = ["derive", "env"] }
+# Disable SSH to avoid libssh2-sys; HTTPS + vendored libgit2 is enough for local diffs.
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
+ignore = "0.4"
+octocrab = "0.44"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
