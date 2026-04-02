@@ -51,7 +51,7 @@ impl LlmConfig {
 
         let model = model
             .or_else(|| std::env::var("OPENAI_MODEL").ok())
-            .unwrap_or_else(|| "gpt-4o-mini".to_string());
+            .unwrap_or_else(|| "gpt-5-nano".to_string());
 
         let api_base = api_base.or_else(|| std::env::var("OPENAI_API_BASE").ok());
 
