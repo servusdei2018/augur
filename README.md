@@ -66,4 +66,4 @@ Set `RUST_LOG` for [`tracing`](https://crates.io/crates/tracing), e.g. `RUST_LOG
 
 ## License
 
-See repository root for license terms.
+Augur is distributed under the MIT License. Refer to the `LICENSE` file for details.
