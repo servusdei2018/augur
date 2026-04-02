@@ -655,12 +655,13 @@ index 111..222 100644
     #[test]
     fn lookup_hunk_error_on_bogus_line() {
         let ctx = sample_ctx(None);
-        let out = run_tool(&ctx, "lookup_hunk", r#"{"path": "src/foo.rs", "line": 999}"#);
+        let out = run_tool(
+            &ctx,
+            "lookup_hunk",
+            r#"{"path": "src/foo.rs", "line": 999}"#,
+        );
         let v = parse_json(&out);
-        assert!(v["error"]
-            .as_str()
-            .unwrap()
-            .contains("not a commentable"));
+        assert!(v["error"].as_str().unwrap().contains("not a commentable"));
     }
 
     #[test]
@@ -703,9 +704,6 @@ index 111..222 100644
             r#"{"path": "src/foo.rs", "line": 999}"#,
         );
         let v = parse_json(&out);
-        assert!(v["error"]
-            .as_str()
-            .unwrap()
-            .contains("not a commentable"));
+        assert!(v["error"].as_str().unwrap().contains("not a commentable"));
     }
 }

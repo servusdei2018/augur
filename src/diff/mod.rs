@@ -636,7 +636,9 @@ index 111..222 100644
     fn lookup_line_finds_addition() {
         let p = parse_unified_diff(SAMPLE).unwrap();
         // new_line 2 is '+    let x = 2;'
-        let info = p.lookup_line("src/foo.rs", 2).expect("line 2 is an addition");
+        let info = p
+            .lookup_line("src/foo.rs", 2)
+            .expect("line 2 is an addition");
         assert_eq!(info.hunk_index, 0);
         assert_eq!(info.kind, LineKind::Addition);
         assert_eq!(info.new_line, 2);
@@ -674,9 +676,7 @@ index 111..222 100644
     fn hunk_context_respects_small_radius() {
         let p = parse_unified_diff(SAMPLE).unwrap();
         // radius=1 → at most 3 lines (pos-1, pos, pos+1)
-        let ctx = p
-            .hunk_context("src/foo.rs", 0, 2, 1)
-            .expect("has context");
+        let ctx = p.hunk_context("src/foo.rs", 0, 2, 1).expect("has context");
         assert!(ctx.lines.len() <= 3);
     }
 
