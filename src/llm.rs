@@ -26,14 +26,16 @@ pub struct ToolLoopConfig {
     pub max_rounds: u32,
     pub max_tool_calls: u32,
     pub max_tool_output_chars: usize,
+    pub max_context_tool_results: usize,
 }
 
 impl Default for ToolLoopConfig {
     fn default() -> Self {
         Self {
-            max_rounds: 24,
-            max_tool_calls: 48,
-            max_tool_output_chars: 400_000,
+            max_rounds: 256,
+            max_tool_calls: 512,
+            max_tool_output_chars: 128_000,
+            max_context_tool_results: 16,
         }
     }
 }
@@ -131,6 +133,8 @@ impl LlmConfig {
             }
             rounds += 1;
 
+            evict_older_tool_results(&mut msgs, config.max_context_tool_results);
+
             // Tool list is small; clone from Arc for the request struct (same cost as a Vec param).
             let request = CreateChatCompletionRequestArgs::default()
                 .model(&self.model)
@@ -206,6 +210,89 @@ impl LlmConfig {
                 return Ok(text);
             }
             anyhow::bail!("empty assistant message without tool calls");
+        }
+    }
+}
+
+pub(crate) fn evict_older_tool_results(msgs: &mut [ChatCompletionRequestMessage], max_keep: usize) {
+    let mut kept_tools = 0;
+    for msg in msgs.iter_mut().rev() {
+        if let ChatCompletionRequestMessage::Tool(t) = msg {
+            kept_tools += 1;
+            if kept_tools > max_keep {
+                if let Ok(new_t) = ChatCompletionRequestToolMessageArgs::default()
+                    .tool_call_id(t.tool_call_id.clone())
+                    .content("[Result evicted to save context]")
+                    .build()
+                {
+                    *msg = new_t.into();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eviction_keeps_recent_tools_and_replaces_old() {
+        let mut msgs = vec![
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id("call_1")
+                .content("first tool result")
+                .build()
+                .unwrap()
+                .into(),
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id("call_2")
+                .content("second tool result")
+                .build()
+                .unwrap()
+                .into(),
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id("call_3")
+                .content("third tool result")
+                .build()
+                .unwrap()
+                .into(),
+        ];
+
+        evict_older_tool_results(&mut msgs, 2);
+
+        // Third and Second should be kept (most recent)
+        // First should be evicted
+        if let ChatCompletionRequestMessage::Tool(t) = &msgs[0] {
+            if let async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) =
+                &t.content
+            {
+                assert_eq!(text, "[Result evicted to save context]");
+            } else {
+                panic!("Expected context text");
+            }
+        } else {
+            panic!("Expected Tool message");
+        }
+
+        if let ChatCompletionRequestMessage::Tool(t) = &msgs[1] {
+            if let async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) =
+                &t.content
+            {
+                assert_eq!(text, "second tool result");
+            } else {
+                panic!("Expected context text");
+            }
+        }
+
+        if let ChatCompletionRequestMessage::Tool(t) = &msgs[2] {
+            if let async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) =
+                &t.content
+            {
+                assert_eq!(text, "third tool result");
+            } else {
+                panic!("Expected context text");
+            }
         }
     }
 }

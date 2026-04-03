@@ -485,9 +485,9 @@ index 111..222 100644
             base_sha: "deadbeef".into(),
             head_sha: "cafebabe".into(),
             parsed,
-            max_patch_chars: 32_000,
-            max_file_lines: 400,
-            max_grep_matches: 80,
+            max_patch_chars: 16_000,
+            max_file_lines: 256,
+            max_grep_matches: 32,
         }
     }
 

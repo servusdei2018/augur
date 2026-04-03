@@ -26,10 +26,11 @@ fn build_agent_config(run: &ReviewRunOpts) -> AgentConfig {
     AgentConfig {
         max_rounds: run.max_rounds,
         max_tool_calls: run.max_tool_calls,
-        max_tool_output_chars: 400_000,
+        max_tool_output_chars: 128_000,
         max_patch_chars: run.max_patch_chars,
         max_file_lines: run.max_file_lines,
         max_grep_matches: run.max_grep_matches,
+        max_context_tool_results: run.max_context_tool_results,
     }
 }
 

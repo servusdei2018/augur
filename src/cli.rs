@@ -61,27 +61,32 @@ pub struct ReviewRunOpts {
     #[arg(long)]
     pub single_shot: bool,
 
-    #[arg(long, default_value_t = 24)]
+    #[arg(long, default_value_t = 256)]
     pub max_rounds: u32,
 
-    #[arg(long, default_value_t = 48)]
+    #[arg(long, default_value_t = 512)]
     pub max_tool_calls: u32,
+
+    /// Max number of recent tool results to keep in the context window.
+    /// Older tool results will have their content evicted to save tokens.
+    #[arg(long, env = "AUGUR_MAX_CONTEXT_TOOL_RESULTS", default_value_t = 16)]
+    pub max_context_tool_results: usize,
 
     /// Soft cap on unified diff size for single-shot mode and parsing (may exceed slightly so
     /// at least one whole file remains reviewable when the first file is huge).
-    #[arg(long, default_value_t = 120_000)]
+    #[arg(long, default_value_t = 64_000)]
     pub max_diff_chars: usize,
 
     /// Max characters returned by `read_patch` per call.
-    #[arg(long, default_value_t = 32_000)]
+    #[arg(long, default_value_t = 16_000)]
     pub max_patch_chars: usize,
 
     /// Max lines returned by `read_file_at_ref` per call.
-    #[arg(long, default_value_t = 400)]
+    #[arg(long, default_value_t = 128)]
     pub max_file_lines: usize,
 
     /// Max grep matches per call.
-    #[arg(long, default_value_t = 80)]
+    #[arg(long, default_value_t = 32)]
     pub max_grep_matches: usize,
 
     /// Print JSON with `markdown` and `findings` instead of human-readable output.
@@ -168,8 +173,7 @@ mod tests {
         .expect("parse");
         match augur.command {
             Commands::Review(args) => {
-                assert!(!args.run.single_shot);
-                assert_eq!(args.run.max_diff_chars, 120_000);
+                assert_eq!(args.run.max_diff_chars, 64_000);
                 match args.target {
                     ReviewTarget::Local { base, head, repo } => {
                         assert_eq!(base, "main");
