@@ -9,7 +9,7 @@ anyhow = "1"
 async-openai = "0.27"
 clap = { version = "4", features = ["derive", "env"] }
 # Disable SSH to avoid libssh2-sys; HTTPS + vendored libgit2 is enough for local diffs.
-git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 ignore = "0.4"
 octocrab = "0.44"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
