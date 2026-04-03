@@ -1,0 +1,35 @@
+name: Augur Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Required for augur to see history
+
+      - name: Download Augur
+        run: |
+          curl -L "https://github.com/servusdei2018/augur/releases/latest/download/augur-x86_64-unknown-linux-musl.tar.gz" | tar -xz
+          chmod +x augur
+          sudo mv augur /usr/local/bin/
+
+      - name: Run Augur Review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO_OWNER=$(echo $GITHUB_REPOSITORY | cut -d'/' -f1)
+          REPO_NAME=$(echo $GITHUB_REPOSITORY | cut -d'/' -f2)
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          
+          augur review pr "$REPO_OWNER" "$REPO_NAME" "$PR_NUMBER"
