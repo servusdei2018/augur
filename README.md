@@ -2,6 +2,9 @@
 
 CLI code review for local git branches and GitHub pull requests, using any OpenAI-compatible HTTP API.
 
+> [!TIP]
+> See [CI.md](./CI.md) for a guide on integrating **augur** into GitHub Actions.
+
 ## Requirements
 
 - Rust toolchain
@@ -13,7 +16,7 @@ CLI code review for local git branches and GitHub pull requests, using any OpenA
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Yes (for LLM) | API key for your provider. |
 | `OPENAI_API_BASE` | No | Base URL for OpenAI-compatible APIs (e.g. `https://api.openai.com/v1`). Omit for default OpenAI. |
-| `OPENAI_MODEL` | No | Model id; defaults to `gpt-5-nano` if unset. |
+| `OPENAI_MODEL` | No | Model id; defaults to `gpt-5.4-nano` if unset. |
 | `GITHUB_TOKEN` or `GH_TOKEN` | Yes for `review pr` | Token used for GitHub API (same idea as the `gh` CLI). |
 | `GITHUB_API_URL` | No | REST API root URL. Default is `https://api.github.com`. For **GitHub Enterprise Server**, set the full API base (often `https://<hostname>/api/v3`). |
 | `GITHUB_HOST` | No | **GitHub Enterprise Server** hostname only if `GITHUB_API_URL` is unset; augur uses `https://<GITHUB_HOST>/api/v3`. Do not set this for github.com—leave unset or set `GITHUB_API_URL` explicitly. |
@@ -57,7 +60,7 @@ augur review pr octo-org hello-world 42 --dry-run
 Override LLM settings per run:
 
 ```bash
-augur review local --base main --head HEAD --model gpt-5-nano --api-base https://api.example.com/v1 --api-key "$KEY"
+augur review local --base main --head HEAD --model gpt-5.4-nano --api-base https://api.example.com/v1 --api-key "$KEY"
 ```
 
 ## Logging

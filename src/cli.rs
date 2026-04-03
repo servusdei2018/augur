@@ -30,7 +30,7 @@ Examples:
 Environment:
   OPENAI_API_KEY     API key for the LLM provider (required).
   OPENAI_API_BASE    Base URL for OpenAI-compatible APIs (optional).
-  OPENAI_MODEL       Model id (optional; defaults to gpt-5-nano if unset).
+  OPENAI_MODEL       Model id (optional; defaults to gpt-5.4-nano if unset).
   GITHUB_TOKEN       GitHub personal access token for `review pr` (or GH_TOKEN).
   GITHUB_API_URL     GitHub REST API base (optional; GitHub Enterprise: full URL, e.g. …/api/v3).
   GITHUB_HOST        GitHub Enterprise hostname only if GITHUB_API_URL unset (API at https://HOST/api/v3).
