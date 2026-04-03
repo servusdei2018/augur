@@ -31,6 +31,7 @@ fn build_agent_config(run: &ReviewRunOpts) -> AgentConfig {
         max_file_lines: run.max_file_lines,
         max_grep_matches: run.max_grep_matches,
         max_context_tool_results: run.max_context_tool_results,
+        max_context_chars: run.max_context_chars,
     }
 }
 

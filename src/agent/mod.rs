@@ -50,18 +50,20 @@ pub struct AgentConfig {
     pub max_file_lines: usize,
     pub max_grep_matches: usize,
     pub max_context_tool_results: usize,
+    pub max_context_chars: usize,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_rounds: 256,
+            max_rounds: 128,
             max_tool_calls: 512,
             max_tool_output_chars: 128_000,
             max_patch_chars: 16_000,
             max_file_lines: 256,
             max_grep_matches: 32,
             max_context_tool_results: 16,
+            max_context_chars: 128_000,
         }
     }
 }
@@ -236,6 +238,7 @@ pub async fn run_review_agent(
         max_tool_calls: agent_cfg.max_tool_calls,
         max_tool_output_chars: agent_cfg.max_tool_output_chars,
         max_context_tool_results: agent_cfg.max_context_tool_results,
+        max_context_chars: agent_cfg.max_context_chars,
     };
 
     let text = llm

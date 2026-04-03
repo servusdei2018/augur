@@ -61,7 +61,7 @@ pub struct ReviewRunOpts {
     #[arg(long)]
     pub single_shot: bool,
 
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = 128)]
     pub max_rounds: u32,
 
     #[arg(long, default_value_t = 512)]
@@ -71,6 +71,11 @@ pub struct ReviewRunOpts {
     /// Older tool results will have their content evicted to save tokens.
     #[arg(long, env = "AUGUR_MAX_CONTEXT_TOOL_RESULTS", default_value_t = 16)]
     pub max_context_tool_results: usize,
+
+    /// Max character length of the context. If exceeded, the history will be aggressively
+    /// summarized.
+    #[arg(long, env = "AUGUR_MAX_CONTEXT_CHARS", default_value_t = 128_000)]
+    pub max_context_chars: usize,
 
     /// Soft cap on unified diff size for single-shot mode and parsing (may exceed slightly so
     /// at least one whole file remains reviewable when the first file is huge).

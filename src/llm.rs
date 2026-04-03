@@ -27,15 +27,17 @@ pub struct ToolLoopConfig {
     pub max_tool_calls: u32,
     pub max_tool_output_chars: usize,
     pub max_context_tool_results: usize,
+    pub max_context_chars: usize,
 }
 
 impl Default for ToolLoopConfig {
     fn default() -> Self {
         Self {
-            max_rounds: 256,
+            max_rounds: 128,
             max_tool_calls: 512,
             max_tool_output_chars: 128_000,
             max_context_tool_results: 16,
+            max_context_chars: 128_000,
         }
     }
 }
@@ -135,6 +137,11 @@ impl LlmConfig {
 
             evict_older_tool_results(&mut msgs, config.max_context_tool_results);
 
+            if estimate_context_size(&msgs) > (config.max_context_chars * 3 / 4) {
+                tracing::info!("Context threshold reached; summarizing older history...");
+                self.summarize_history(&mut msgs).await?;
+            }
+
             // Tool list is small; clone from Arc for the request struct (same cost as a Vec param).
             let request = CreateChatCompletionRequestArgs::default()
                 .model(&self.model)
@@ -212,6 +219,169 @@ impl LlmConfig {
             anyhow::bail!("empty assistant message without tool calls");
         }
     }
+
+    pub async fn summarize_history(
+        &self,
+        msgs: &mut Vec<ChatCompletionRequestMessage>,
+    ) -> Result<()> {
+        // We need enough messages to make summarization worthwhile
+        if msgs.len() < 10 {
+            return Ok(());
+        }
+
+        // Keep System (0), Initial User (1), and the last 4 turns.
+        let keep_front = 2;
+        let keep_back = 4;
+        let summarize_slice = &msgs[keep_front..msgs.len() - keep_back];
+
+        let summary_text = self.summarize_messages(summarize_slice).await?;
+
+        let summary_msg = ChatCompletionRequestSystemMessageArgs::default()
+            .content(format!(
+                "[SUMMARY of previous interactions to save space]:\n\n{summary_text}"
+            ))
+            .build()?
+            .into();
+
+        let mut new_msgs = Vec::with_capacity(keep_front + 1 + keep_back);
+        new_msgs.push(msgs[0].clone());
+        new_msgs.push(msgs[1].clone());
+        new_msgs.push(summary_msg);
+        new_msgs.extend(msgs[msgs.len() - keep_back..].iter().cloned());
+
+        *msgs = new_msgs;
+        Ok(())
+    }
+
+    async fn summarize_messages(
+        &self,
+        messages: &[ChatCompletionRequestMessage],
+    ) -> Result<String> {
+        let mut history_text = String::new();
+        for m in messages {
+            match m {
+                ChatCompletionRequestMessage::Assistant(a) => {
+                    history_text.push_str("Assistant: ");
+                    if let Some(content) = &a.content {
+                        match content {
+                            ChatCompletionRequestAssistantMessageContent::Text(t) => {
+                                history_text.push_str(t)
+                            }
+                            _ => {
+                                history_text.push_str("[Non-text content]");
+                            }
+                        }
+                    }
+                    if let Some(calls) = &a.tool_calls {
+                        for call in calls {
+                            history_text.push_str(&format!(
+                                "\nTool call: {} with args: {}\n",
+                                call.function.name, call.function.arguments
+                            ));
+                        }
+                    }
+                    history_text.push('\n');
+                }
+                ChatCompletionRequestMessage::Tool(t) => {
+                    history_text.push_str("Tool Output: ");
+                    match &t.content {
+                        async_openai::types::ChatCompletionRequestToolMessageContent::Text(
+                            text,
+                        ) => history_text.push_str(text),
+                        async_openai::types::ChatCompletionRequestToolMessageContent::Array(
+                            parts,
+                        ) => {
+                            for part in parts {
+                                let async_openai::types::ChatCompletionRequestToolMessageContentPart::Text(tp) = part;
+                                history_text.push_str(&tp.text);
+                            }
+                        }
+                    }
+                    history_text.push('\n');
+                }
+                ChatCompletionRequestMessage::User(u) => {
+                    history_text.push_str("User: ");
+                    match &u.content {
+                        async_openai::types::ChatCompletionRequestUserMessageContent::Text(t) => {
+                            history_text.push_str(t)
+                        }
+                        async_openai::types::ChatCompletionRequestUserMessageContent::Array(a) => {
+                            for item in a {
+                                if let async_openai::types::ChatCompletionRequestUserMessageContentPart::Text(t) = item {
+                                    history_text.push_str(&t.text);
+                                }
+                            }
+                        }
+                    }
+                    history_text.push('\n');
+                }
+                _ => {}
+            }
+        }
+
+        let prompt = "The following is part of a code review agent's turn history. \
+                      Summarize the key findings, code contents seen, and relevant grep results into a concise technical brief. \
+                      Exclude meta-conversation but preserve details needed for the rest of the review.";
+
+        self.complete(prompt, &history_text).await
+    }
+}
+
+pub(crate) fn estimate_context_size(msgs: &[ChatCompletionRequestMessage]) -> usize {
+    let mut total = 0;
+    for m in msgs {
+        match m {
+            ChatCompletionRequestMessage::System(s) => match &s.content {
+                async_openai::types::ChatCompletionRequestSystemMessageContent::Text(t) => {
+                    total += t.len();
+                }
+                _ => {
+                    // Ignore other content types for size estimation
+                }
+            },
+            ChatCompletionRequestMessage::User(u) => match &u.content {
+                async_openai::types::ChatCompletionRequestUserMessageContent::Text(t) => {
+                    total += t.len()
+                }
+                async_openai::types::ChatCompletionRequestUserMessageContent::Array(parts) => {
+                    for part in parts {
+                        if let async_openai::types::ChatCompletionRequestUserMessageContentPart::Text(
+                            tp,
+                        ) = part
+                        {
+                            total += tp.text.len();
+                        }
+                    }
+                }
+            },
+            ChatCompletionRequestMessage::Assistant(a) => {
+                if let Some(ChatCompletionRequestAssistantMessageContent::Text(t)) = &a.content {
+                    total += t.len();
+                }
+                if let Some(calls) = &a.tool_calls {
+                    for call in calls {
+                        total += call.function.name.len();
+                        total += call.function.arguments.len();
+                    }
+                }
+            }
+            ChatCompletionRequestMessage::Tool(t) => match &t.content {
+                async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) => {
+                    total += text.len()
+                }
+                async_openai::types::ChatCompletionRequestToolMessageContent::Array(parts) => {
+                    for part in parts {
+                        let async_openai::types::ChatCompletionRequestToolMessageContentPart::Text(
+                            tp,
+                        ) = part;
+                        total += tp.text.len();
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    total
 }
 
 pub(crate) fn evict_older_tool_results(msgs: &mut [ChatCompletionRequestMessage], max_keep: usize) {
@@ -294,5 +464,36 @@ mod tests {
                 panic!("Expected context text");
             }
         }
+    }
+
+    #[test]
+    fn estimate_size_counts_all_message_types() {
+        let msgs = vec![
+            ChatCompletionRequestSystemMessageArgs::default()
+                .content("system")
+                .build()
+                .unwrap()
+                .into(),
+            ChatCompletionRequestUserMessageArgs::default()
+                .content("user")
+                .build()
+                .unwrap()
+                .into(),
+            ChatCompletionRequestAssistantMessage {
+                content: Some(ChatCompletionRequestAssistantMessageContent::Text(
+                    "assistant".into(),
+                )),
+                ..Default::default()
+            }
+            .into(),
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id("id")
+                .content("tool")
+                .build()
+                .unwrap()
+                .into(),
+        ];
+        // 6 + 4 + 9 + 4 = 23
+        assert_eq!(estimate_context_size(&msgs), 23);
     }
 }
