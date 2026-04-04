@@ -1,6 +1,6 @@
 [package]
 name = "augur"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "CLI code review for local git branches and GitHub pull requests via OpenAI-compatible APIs"
 

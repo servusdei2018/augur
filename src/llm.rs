@@ -193,13 +193,13 @@ impl LlmConfig {
                         anyhow::bail!("exceeded max_tool_calls ({})", config.max_tool_calls);
                     }
                     tool_calls_used += 1;
-                    
+
                     let call_id = call.id.clone();
                     let name = call.function.name.clone();
                     let args = call.function.arguments.clone();
                     let limit = config.max_tool_output_chars;
                     let f = run_tool.clone();
-                    
+
                     tool_tasks.push(tokio::task::spawn_blocking(move || {
                         let mut out = f(&name, &args);
                         if out.len() > limit {
