@@ -118,13 +118,16 @@ impl LlmConfig {
     /// owned [`Vec`] for the request body. The conversation `messages` vector is cloned each round
     /// because [`CreateChatCompletionRequest`](async_openai::types::CreateChatCompletionRequest)
     /// requires an owned history snapshot.
-    pub async fn chat_with_tools(
+    pub async fn chat_with_tools<F>(
         &self,
         messages: Vec<ChatCompletionRequestMessage>,
         tools: Arc<Vec<ChatCompletionTool>>,
-        mut run_tool: impl FnMut(&str, &str) -> String,
+        run_tool: F,
         config: ToolLoopConfig,
-    ) -> Result<String> {
+    ) -> Result<String>
+    where
+        F: Fn(&str, &str) -> String + Send + Sync + Clone + 'static,
+    {
         let client = self.client();
         let mut msgs = messages;
         let mut rounds: u32 = 0;
@@ -183,23 +186,34 @@ impl LlmConfig {
                 );
                 msgs.push(assistant);
 
+                let mut tool_tasks = Vec::new();
+
                 for call in tool_calls {
                     if tool_calls_used >= config.max_tool_calls {
                         anyhow::bail!("exceeded max_tool_calls ({})", config.max_tool_calls);
                     }
                     tool_calls_used += 1;
-                    let name = &call.function.name;
-                    let args = &call.function.arguments;
-                    let mut out = run_tool(name, args);
-                    if out.len() > config.max_tool_output_chars {
-                        out = out
-                            .chars()
-                            .take(config.max_tool_output_chars)
-                            .collect::<String>();
-                        out.push_str("\n[tool output truncated]\n");
-                    }
+                    
+                    let call_id = call.id.clone();
+                    let name = call.function.name.clone();
+                    let args = call.function.arguments.clone();
+                    let limit = config.max_tool_output_chars;
+                    let f = run_tool.clone();
+                    
+                    tool_tasks.push(tokio::task::spawn_blocking(move || {
+                        let mut out = f(&name, &args);
+                        if out.len() > limit {
+                            out = out.chars().take(limit).collect::<String>();
+                            out.push_str("\n[tool output truncated]\n");
+                        }
+                        (call_id, out)
+                    }));
+                }
+
+                for task in tool_tasks {
+                    let (call_id, out) = task.await.context("tool task panicked")?;
                     let tool_msg = ChatCompletionRequestToolMessageArgs::default()
-                        .tool_call_id(call.id.clone())
+                        .tool_call_id(call_id)
                         .content(out)
                         .build()?
                         .into();
