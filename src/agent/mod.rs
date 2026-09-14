@@ -4,10 +4,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_openai::types::{
+use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionToolArgs,
-    FunctionObjectArgs,
+    ChatCompletionRequestUserMessageArgs, ChatCompletionTool, FunctionObjectArgs,
 };
 use serde::Deserialize;
 
@@ -136,81 +135,69 @@ Use "line" as the line number on the NEW (right) side of the diff."#
 /// Build OpenAI tool definitions for the review agent.
 pub fn review_chat_tools() -> Vec<ChatCompletionTool> {
     vec![
-        ChatCompletionToolArgs::default()
-            .function(
-                FunctionObjectArgs::default()
-                    .name("list_changed_files")
-                    .description("List files changed in this review with change kind and rough size.")
-                    .parameters(serde_json::json!({
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": false
-                    }))
-                    .build()
-                    .expect("tool schema"),
-            )
-            .build()
-            .expect("tool"),
-        ChatCompletionToolArgs::default()
-            .function(
-                FunctionObjectArgs::default()
-                    .name("read_patch")
-                    .description("Return the unified diff text for one file, optionally one hunk by index (0-based).")
-                    .parameters(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "path": { "type": "string", "description": "Repository-relative file path (new path)" },
-                            "hunk_index": { "type": "integer", "description": "Optional 0-based hunk index" },
-                            "max_chars": { "type": "integer", "description": "Optional max characters of patch text" }
-                        },
-                        "required": ["path"],
-                        "additionalProperties": false
-                    }))
-                    .build()
-                    .expect("tool schema"),
-            )
-            .build()
-            .expect("tool"),
-        ChatCompletionToolArgs::default()
-            .function(
-                FunctionObjectArgs::default()
-                    .name("read_file_at_ref")
-                    .description("Read UTF-8 file content at merge-base (base) or PR head (head) from the local clone.")
-                    .parameters(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "git_ref": { "type": "string", "description": "Either \"base\" or \"head\"" },
-                            "path": { "type": "string" },
-                            "start_line": { "type": "integer" },
-                            "end_line": { "type": "integer" }
-                        },
-                        "required": ["git_ref", "path"],
-                        "additionalProperties": false
-                    }))
-                    .build()
-                    .expect("tool schema"),
-            )
-            .build()
-            .expect("tool"),
-        ChatCompletionToolArgs::default()
-            .function(
-                FunctionObjectArgs::default()
-                    .name("grep_repo")
-                    .description("Search with a regex (or literal if invalid regex) in changed files or the whole repo.")
-                    .parameters(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "pattern": { "type": "string" },
-                            "scope": { "type": "string", "enum": ["changed", "all"], "description": "Default changed" }
-                        },
-                        "required": ["pattern"],
-                        "additionalProperties": false
-                    }))
-                    .build()
-                    .expect("tool schema"),
-            )
-            .build()
-            .expect("tool"),
+        ChatCompletionTool {
+            function: FunctionObjectArgs::default()
+                .name("list_changed_files")
+                .description("List files changed in this review with change kind and rough size.")
+                .parameters(serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }))
+                .build()
+                .expect("tool schema"),
+        },
+        ChatCompletionTool {
+            function: FunctionObjectArgs::default()
+                .name("read_patch")
+                .description("Return the unified diff text for one file, optionally one hunk by index (0-based).")
+                .parameters(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Repository-relative file path (new path)" },
+                        "hunk_index": { "type": "integer", "description": "Optional 0-based hunk index" },
+                        "max_chars": { "type": "integer", "description": "Optional max characters of patch text" }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }))
+                .build()
+                .expect("tool schema"),
+        },
+        ChatCompletionTool {
+            function: FunctionObjectArgs::default()
+                .name("read_file_at_ref")
+                .description("Read UTF-8 file content at merge-base (base) or PR head (head) from the local clone.")
+                .parameters(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "git_ref": { "type": "string", "description": "Either \"base\" or \"head\"" },
+                        "path": { "type": "string" },
+                        "start_line": { "type": "integer" },
+                        "end_line": { "type": "integer" }
+                    },
+                    "required": ["git_ref", "path"],
+                    "additionalProperties": false
+                }))
+                .build()
+                .expect("tool schema"),
+        },
+        ChatCompletionTool {
+            function: FunctionObjectArgs::default()
+                .name("grep_repo")
+                .description("Search with a regex (or literal if invalid regex) in changed files or the whole repo.")
+                .parameters(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string" },
+                        "scope": { "type": "string", "enum": ["changed", "all"], "description": "Default changed" }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }))
+                .build()
+                .expect("tool schema"),
+        },
     ]
 }
 

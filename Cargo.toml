@@ -6,12 +6,12 @@ description = "CLI code review for local git branches and GitHub pull requests v
 
 [dependencies]
 anyhow = "1"
-async-openai = "0.27"
+async-openai = { version = "0.42", features = ["chat-completion"] }
 clap = { version = "4", features = ["derive", "env"] }
 # Disable SSH to avoid libssh2-sys; HTTPS + vendored libgit2 is enough for local diffs.
-git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+git2 = { version = "0.21", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 ignore = "0.4"
-octocrab = "0.44"
+octocrab = "0.54"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

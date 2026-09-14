@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_openai::config::OpenAIConfig;
-use async_openai::types::{
-    ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
-    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs, ChatCompletionTool,
-    ChatCompletionToolChoiceOption, CreateChatCompletionRequestArgs, FinishReason,
+use async_openai::types::chat::{
+    ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessage,
+    ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+    ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionToolChoiceOption,
+    ChatCompletionTools, CreateChatCompletionRequestArgs, FinishReason, ToolChoiceOptions,
 };
 use async_openai::Client;
 
@@ -145,12 +146,22 @@ impl LlmConfig {
                 self.summarize_history(&mut msgs).await?;
             }
 
+            // Wrap each ChatCompletionTool in the ChatCompletionTools::Function variant.
+            let tools_list: Vec<ChatCompletionTools> = tools
+                .as_ref()
+                .iter()
+                .cloned()
+                .map(ChatCompletionTools::Function)
+                .collect();
+
             // Tool list is small; clone from Arc for the request struct (same cost as a Vec param).
             let request = CreateChatCompletionRequestArgs::default()
                 .model(&self.model)
                 .messages(msgs.clone())
-                .tools(tools.as_ref().clone())
-                .tool_choice(ChatCompletionToolChoiceOption::Auto)
+                .tools(tools_list)
+                .tool_choice(ChatCompletionToolChoiceOption::Mode(
+                    ToolChoiceOptions::Auto,
+                ))
                 .build()?;
 
             let response = client
@@ -188,7 +199,13 @@ impl LlmConfig {
 
                 let mut tool_tasks = Vec::new();
 
-                for call in tool_calls {
+                for call_enum in tool_calls {
+                    // Only dispatch function tool calls; skip custom tool calls.
+                    let call = match call_enum {
+                        async_openai::types::chat::ChatCompletionMessageToolCalls::Function(c) => c,
+                        _ => continue,
+                    };
+
                     if tool_calls_used >= config.max_tool_calls {
                         anyhow::bail!("exceeded max_tool_calls ({})", config.max_tool_calls);
                     }
@@ -287,11 +304,13 @@ impl LlmConfig {
                         }
                     }
                     if let Some(calls) = &a.tool_calls {
-                        for call in calls {
-                            history_text.push_str(&format!(
-                                "\nTool call: {} with args: {}\n",
-                                call.function.name, call.function.arguments
-                            ));
+                        for call_enum in calls {
+                            if let ChatCompletionMessageToolCalls::Function(call) = call_enum {
+                                history_text.push_str(&format!(
+                                    "\nTool call: {} with args: {}\n",
+                                    call.function.name, call.function.arguments
+                                ));
+                            }
                         }
                     }
                     history_text.push('\n');
@@ -299,14 +318,14 @@ impl LlmConfig {
                 ChatCompletionRequestMessage::Tool(t) => {
                     history_text.push_str("Tool Output: ");
                     match &t.content {
-                        async_openai::types::ChatCompletionRequestToolMessageContent::Text(
+                        async_openai::types::chat::ChatCompletionRequestToolMessageContent::Text(
                             text,
                         ) => history_text.push_str(text),
-                        async_openai::types::ChatCompletionRequestToolMessageContent::Array(
+                        async_openai::types::chat::ChatCompletionRequestToolMessageContent::Array(
                             parts,
                         ) => {
                             for part in parts {
-                                let async_openai::types::ChatCompletionRequestToolMessageContentPart::Text(tp) = part;
+                                let async_openai::types::chat::ChatCompletionRequestToolMessageContentPart::Text(tp) = part;
                                 history_text.push_str(&tp.text);
                             }
                         }
@@ -316,12 +335,12 @@ impl LlmConfig {
                 ChatCompletionRequestMessage::User(u) => {
                     history_text.push_str("User: ");
                     match &u.content {
-                        async_openai::types::ChatCompletionRequestUserMessageContent::Text(t) => {
+                        async_openai::types::chat::ChatCompletionRequestUserMessageContent::Text(t) => {
                             history_text.push_str(t)
                         }
-                        async_openai::types::ChatCompletionRequestUserMessageContent::Array(a) => {
+                        async_openai::types::chat::ChatCompletionRequestUserMessageContent::Array(a) => {
                             for item in a {
-                                if let async_openai::types::ChatCompletionRequestUserMessageContentPart::Text(t) = item {
+                                if let async_openai::types::chat::ChatCompletionRequestUserMessageContentPart::Text(t) = item {
                                     history_text.push_str(&t.text);
                                 }
                             }
@@ -346,7 +365,7 @@ pub(crate) fn estimate_context_size(msgs: &[ChatCompletionRequestMessage]) -> us
     for m in msgs {
         match m {
             ChatCompletionRequestMessage::System(s) => match &s.content {
-                async_openai::types::ChatCompletionRequestSystemMessageContent::Text(t) => {
+                async_openai::types::chat::ChatCompletionRequestSystemMessageContent::Text(t) => {
                     total += t.len();
                 }
                 _ => {
@@ -354,12 +373,14 @@ pub(crate) fn estimate_context_size(msgs: &[ChatCompletionRequestMessage]) -> us
                 }
             },
             ChatCompletionRequestMessage::User(u) => match &u.content {
-                async_openai::types::ChatCompletionRequestUserMessageContent::Text(t) => {
+                async_openai::types::chat::ChatCompletionRequestUserMessageContent::Text(t) => {
                     total += t.len()
                 }
-                async_openai::types::ChatCompletionRequestUserMessageContent::Array(parts) => {
+                async_openai::types::chat::ChatCompletionRequestUserMessageContent::Array(
+                    parts,
+                ) => {
                     for part in parts {
-                        if let async_openai::types::ChatCompletionRequestUserMessageContentPart::Text(
+                        if let async_openai::types::chat::ChatCompletionRequestUserMessageContentPart::Text(
                             tp,
                         ) = part
                         {
@@ -373,19 +394,23 @@ pub(crate) fn estimate_context_size(msgs: &[ChatCompletionRequestMessage]) -> us
                     total += t.len();
                 }
                 if let Some(calls) = &a.tool_calls {
-                    for call in calls {
-                        total += call.function.name.len();
-                        total += call.function.arguments.len();
+                    for call_enum in calls {
+                        if let ChatCompletionMessageToolCalls::Function(call) = call_enum {
+                            total += call.function.name.len();
+                            total += call.function.arguments.len();
+                        }
                     }
                 }
             }
             ChatCompletionRequestMessage::Tool(t) => match &t.content {
-                async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) => {
+                async_openai::types::chat::ChatCompletionRequestToolMessageContent::Text(text) => {
                     total += text.len()
                 }
-                async_openai::types::ChatCompletionRequestToolMessageContent::Array(parts) => {
+                async_openai::types::chat::ChatCompletionRequestToolMessageContent::Array(
+                    parts,
+                ) => {
                     for part in parts {
-                        let async_openai::types::ChatCompletionRequestToolMessageContentPart::Text(
+                        let async_openai::types::chat::ChatCompletionRequestToolMessageContentPart::Text(
                             tp,
                         ) = part;
                         total += tp.text.len();
@@ -448,7 +473,7 @@ mod tests {
         // Third and Second should be kept (most recent)
         // First should be evicted
         if let ChatCompletionRequestMessage::Tool(t) = &msgs[0] {
-            if let async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) =
+            if let async_openai::types::chat::ChatCompletionRequestToolMessageContent::Text(text) =
                 &t.content
             {
                 assert_eq!(text, "[Result evicted to save context]");
@@ -460,7 +485,7 @@ mod tests {
         }
 
         if let ChatCompletionRequestMessage::Tool(t) = &msgs[1] {
-            if let async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) =
+            if let async_openai::types::chat::ChatCompletionRequestToolMessageContent::Text(text) =
                 &t.content
             {
                 assert_eq!(text, "second tool result");
@@ -470,7 +495,7 @@ mod tests {
         }
 
         if let ChatCompletionRequestMessage::Tool(t) = &msgs[2] {
-            if let async_openai::types::ChatCompletionRequestToolMessageContent::Text(text) =
+            if let async_openai::types::chat::ChatCompletionRequestToolMessageContent::Text(text) =
                 &t.content
             {
                 assert_eq!(text, "third tool result");
